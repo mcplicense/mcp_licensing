@@ -71,8 +71,17 @@ def serialized_dynamodb(monkeypatch):
     inside a single TransactWriteItems and give false failures. Serialising
     requests models DynamoDB faithfully; separate requests (such as a read
     followed by a transaction) can still interleave, which is what the
-    concurrency tests exercise."""
+    concurrency tests exercise.
+
+    The same goes for boto3 itself: one resource client has ONE condition
+    builder whose placeholder counters are reset at the start of every request,
+    so two threads building a Key(...) & Key(...) query at once can hand out the
+    same placeholder twice and send a query without its partition key (a
+    ValidationException, seen in roughly 1 in 40 runs of the 25-thread seat
+    test). A Lambda environment handles one request at a time, so production
+    never does this; the tests' threads must not either."""
     import threading
+    from boto3.dynamodb.transform import TransformationInjector
     from moto.dynamodb.responses import DynamoHandler
 
     lock = threading.RLock()
@@ -83,6 +92,15 @@ def serialized_dynamodb(monkeypatch):
             return original(self, *args, **kwargs)
 
     monkeypatch.setattr(DynamoHandler, "call_action", locked)
+
+    build_lock = threading.RLock()
+    original_inject = TransformationInjector.inject_condition_expressions
+
+    def locked_inject(self, *args, **kwargs):
+        with build_lock:
+            return original_inject(self, *args, **kwargs)
+
+    monkeypatch.setattr(TransformationInjector, "inject_condition_expressions", locked_inject)
 
 
 @pytest.fixture(autouse=True)
