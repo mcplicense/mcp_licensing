@@ -118,7 +118,9 @@ def test_api_keys_per_tenant(super_key, tenant):
     assert limit_error(call("POST /v1/admin/api-keys", {}, key=tenant))
 
     keys_listed = call("GET /v1/admin/api-keys", key=tenant)[1]["items"]
-    call("DELETE /v1/admin/api-keys/{key_id}", key=tenant, params={"key_id": keys_listed[-1]["key_id"]})
+    in_use = keys.parse_api_key(tenant)  # key ids are random: do not revoke the key making the requests
+    spare = next(item for item in keys_listed if item["key_id"] != in_use)
+    call("DELETE /v1/admin/api-keys/{key_id}", key=tenant, params={"key_id": spare["key_id"]})
     assert call("POST /v1/admin/api-keys", {}, key=tenant)[0] == 201
 
     # the platform owner can still issue a recovery key
