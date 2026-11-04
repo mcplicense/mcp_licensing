@@ -1,0 +1,708 @@
+openapi: 3.0.3
+info:
+  title: MCP Licensing - Sign-up, login and console API
+  version: 1.0.0
+  description: Called by a web page served from the same domain as these routes (there is no CORS). See
+    docs/login-api.md for the flow, the cookie and the headers.
+servers:
+- url: '{site_url}'
+  variables:
+    site_url:
+      default: https://mcplicense.net
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+paths:
+  /v1/portal/signup:
+    post:
+      summary: 'Start a sign-up. A 6-digit code is emailed to the address. The answer is the same whether
+        or not the address already has an account. Leave the hidden field `website` out (or empty): a
+        bot that fills it in gets a fake success.'
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example:
+                status: code_sent
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_REQUEST`: invalid email, company
+            name, or terms not accepted; `WEAK_PASSWORD`: 12 to 128 characters with a capital, a lower-case
+            letter and a number'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: missing X-Requested-With,
+            or the request did not come from the site; `NOT_ALLOWED`: this address was banned'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: per-visitor, per-address
+            or daily limit reached; the message says how long to wait'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+              password: Correct-Horse-9
+              company_name: Acme Tools
+              accept_terms: true
+  /v1/portal/resend:
+    post:
+      summary: Send the sign-up code again.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example:
+                status: code_sent
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_REQUEST`: invalid email'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: limit reached'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+  /v1/portal/confirm:
+    post:
+      summary: Confirm the address with the emailed code. The first confirmation creates the person's
+        tenant (active at once, generated id `mcp-xxxxxx`) and tells the operator by email. They then
+        log in.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example:
+                status: confirmed
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_CODE`: wrong code, or the address
+            is already confirmed; `CODE_EXPIRED`: ask for a new code with resend'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: limit reached'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+              code: '123456'
+  /v1/portal/login:
+    post:
+      summary: 'Log in. Returns an ID token to send as `Authorization: Bearer` on /v1/console/* (valid
+        `expires_in` seconds, 15 minutes) and sets the refresh cookie. Keep the token in memory only.'
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success and sets the refresh cookie
+          content:
+            application/json:
+              example: &id001
+                id_token: eyJraWQiOi...
+                expires_in: 900
+                email: jane@example.com
+                tenant_id: mcp-k7m2x9
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_REQUEST`: invalid email or empty
+            password; `UNSUPPORTED`: the account needs a sign-in step that is not available'
+        '401':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_LOGIN`: wrong password or unknown
+            address (the same answer for both)'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `NOT_CONFIRMED`: confirm the address
+            first; `RESET_REQUIRED`: reset the password; `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: limit reached'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+              password: Correct-Horse-9
+  /v1/portal/refresh:
+    post:
+      summary: Exchange the refresh cookie for a fresh ID token (a page does this on load and before the
+        token expires). No request body.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      - name: mcp_rt
+        in: cookie
+        required: true
+        schema:
+          type: string
+        description: The refresh cookie set by login (HttpOnly; Secure; SameSite=Strict; Path=/v1/portal/).
+          The browser sends it by itself.
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example: *id001
+        '401':
+          description: 'Error body `{"error": {"code", "message"}}`. `NO_SESSION`: no cookie, or it was
+            rejected (the cookie is cleared): log in again'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: keep the cookie and try
+            again later'
+  /v1/portal/logout:
+    post:
+      summary: Revoke the refresh token and clear the cookie. No request body.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      - name: mcp_rt
+        in: cookie
+        required: true
+        schema:
+          type: string
+        description: The refresh cookie set by login (HttpOnly; Secure; SameSite=Strict; Path=/v1/portal/).
+          The browser sends it by itself.
+      security: []
+      responses:
+        '200':
+          description: Success and clears the cookie
+          content:
+            application/json:
+              example:
+                status: signed_out
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+  /v1/portal/forgot:
+    post:
+      summary: Email a password reset code. The same answer for every address.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example:
+                status: code_sent
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `BAD_REQUEST`: invalid email'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: limit reached'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+  /v1/portal/reset:
+    post:
+      summary: Set a new password with the emailed code.
+      tags:
+      - Sign-up and login
+      parameters:
+      - name: X-Requested-With
+        in: header
+        required: true
+        schema:
+          type: string
+          enum:
+          - mcp-portal
+        description: Marks a deliberate call from the site's own page. The request's Origin must also
+          be the site's origin (a browser sets it).
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              example:
+                status: password_changed
+        '400':
+          description: 'Error body `{"error": {"code", "message"}}`. `WEAK_PASSWORD`: see signup; `BAD_CODE`:
+            wrong code; `CODE_EXPIRED`: ask again'
+        '403':
+          description: 'Error body `{"error": {"code", "message"}}`. `FORBIDDEN`: see signup'
+        '429':
+          description: 'Error body `{"error": {"code", "message"}}`. `TOO_MANY`: limit reached'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              email: jane@example.com
+              code: '123456'
+              password: Another-Horse-9
+  /v1/console/tenant:
+    get:
+      summary: Show your tenant, its status, the limits that apply to it (licenses, seats, API keys, verify
+        requests per minute) and how much of them you use. Creating more than a limit allows returns 403
+        LIMIT_REACHED. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+    patch:
+      summary: Set your default seat lease in seconds (300 to 2592000; null restores the platform default
+        of 24h). A device that does not check in within its lease loses its seat automatically. (Same
+        operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              lease_duration_sec: 43200
+  /v1/console/tenant/status:
+    put:
+      summary: 'Tenant kill switch: suspend or resume all of your licenses. A platform-level disable cannot
+        be lifted here. (Same operation as the admin API, for a signed-in person.)'
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              suspended: true
+              reason: Security incident
+  /v1/console/api-keys:
+    get:
+      summary: List your admin API keys. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+    post:
+      summary: Create another admin API key. The key is returned once. (Same operation as the admin API,
+        for a signed-in person.)
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              label: ci pipeline
+  /v1/console/api-keys/{key_id}:
+    delete:
+      summary: Revoke an admin API key. The last active key cannot be revoked. (Same operation as the
+        admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+  /v1/console/licenses:
+    get:
+      summary: List licenses. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: string
+      - name: next_token
+        in: query
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+    post:
+      summary: Create a license. The license_key is returned once; give it to the end user. Optional lease_duration_sec
+        overrides the tenant and platform default for this license. (Same operation as the admin API,
+        for a signed-in person.)
+      tags:
+      - Console
+      parameters: []
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              label: Jane's laptop
+              seats_max: 2
+              expires_at: '2027-12-31'
+              lease_duration_sec: 86400
+  /v1/console/licenses/{license_id}:
+    get:
+      summary: Show one license. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+    patch:
+      summary: Change label, seats_max, expires_at or lease_duration_sec (null clears the override). (Same
+        operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              seats_max: 5
+  /v1/console/licenses/{license_id}/status:
+    put:
+      summary: Revoke or reinstate one license. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              status: REVOKED
+              reason: Left the company
+  /v1/console/licenses/{license_id}/rotate-key:
+    post:
+      summary: Issue a new license_key (returned once). The old key stops working immediately. (Same operation
+        as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+  /v1/console/licenses/{license_id}/seats:
+    get:
+      summary: List devices using a license, with each seat's lease_expires_at (epoch seconds) and whether
+        it is active. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+  /v1/console/licenses/{license_id}/seats/{device_id}:
+    delete:
+      summary: Free the seat held by a device. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+  /v1/console/audit-log:
+    get:
+      summary: Recent changes to your tenant. (Same operation as the admin API, for a signed-in person.)
+      tags:
+      - Console
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: string
+      - name: next_token
+        in: query
+        schema:
+          type: string
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Success
+        '401':
+          description: 'Missing, invalid or expired ID token: refresh it or log in again.'
+        '403':
+          description: '`TENANT_DISABLED` (the tenant was suspended or banned) or `NO_TENANT`.'
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'

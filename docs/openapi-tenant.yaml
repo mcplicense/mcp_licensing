@@ -1,0 +1,352 @@
+openapi: 3.0.3
+info:
+  title: MCP Licensing - Tenant API
+  version: 1.0.0
+servers:
+- url: '{base_url}'
+  variables:
+    base_url:
+      default: https://api.mcplicense.net
+components:
+  securitySchemes:
+    TenantApiKey:
+      type: apiKey
+      in: header
+      name: X-Tenant-Api-Key
+paths:
+  /v1/mcp/verify:
+    post:
+      summary: Check a license key and register this device. Called by the MCP tool at startup.
+      tags:
+      - Verify (end user)
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+        '401':
+          description: INVALID_KEY
+        '403':
+          description: GLOBAL_DISABLED, TENANT_DISABLED, LICENSE_REVOKED, LICENSE_EXPIRED or SEAT_LIMIT.
+            The client must stop and clear its cache.
+        '429':
+          description: 'RATE_LIMITED: this tenant exceeded its verify requests per minute (default 100).
+            Not a denial. Retry after retry_after_seconds; meanwhile keep running on the last successful
+            result.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              license_key: acme_7K2M9-X4QPD-8WHT3-NB6RC-ZV5YA
+              device_id: laptop-7f3a
+      security: []
+  /v1/admin/tenant:
+    get:
+      summary: Show your tenant, its status, the limits that apply to it (licenses, seats, API keys, verify
+        requests per minute) and how much of them you use. Creating more than a limit allows returns 403
+        LIMIT_REACHED.
+      tags:
+      - Tenant
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+    patch:
+      summary: Set your default seat lease in seconds (300 to 2592000; null restores the platform default
+        of 24h). A device that does not check in within its lease loses its seat automatically.
+      tags:
+      - Tenant
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              lease_duration_sec: 43200
+      security:
+      - TenantApiKey: []
+  /v1/admin/tenant/status:
+    put:
+      summary: 'Tenant kill switch: suspend or resume all of your licenses. A platform-level disable cannot
+        be lifted here.'
+      tags:
+      - Tenant
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              suspended: true
+              reason: Security incident
+      security:
+      - TenantApiKey: []
+  /v1/admin/api-keys:
+    get:
+      summary: List your admin API keys.
+      tags:
+      - API keys
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+    post:
+      summary: Create another admin API key. The key is returned once.
+      tags:
+      - API keys
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              label: ci pipeline
+      security:
+      - TenantApiKey: []
+  /v1/admin/api-keys/{key_id}:
+    delete:
+      summary: Revoke an admin API key. The last active key cannot be revoked.
+      tags:
+      - API keys
+      parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses:
+    get:
+      summary: List licenses.
+      tags:
+      - Licenses
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: string
+      - name: next_token
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+    post:
+      summary: Create a license. The license_key is returned once; give it to the end user. Optional lease_duration_sec
+        overrides the tenant and platform default for this license.
+      tags:
+      - Licenses
+      parameters: []
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              label: Jane's laptop
+              seats_max: 2
+              expires_at: '2027-12-31'
+              lease_duration_sec: 86400
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses/{license_id}:
+    get:
+      summary: Show one license.
+      tags:
+      - Licenses
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+    patch:
+      summary: Change label, seats_max, expires_at or lease_duration_sec (null clears the override).
+      tags:
+      - Licenses
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              seats_max: 5
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses/{license_id}/status:
+    put:
+      summary: Revoke or reinstate one license.
+      tags:
+      - Licenses
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+            example:
+              status: REVOKED
+              reason: Left the company
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses/{license_id}/rotate-key:
+    post:
+      summary: Issue a new license_key (returned once). The old key stops working immediately.
+      tags:
+      - Licenses
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses/{license_id}/seats:
+    get:
+      summary: List devices using a license, with each seat's lease_expires_at (epoch seconds) and whether
+        it is active.
+      tags:
+      - Seats
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+  /v1/admin/licenses/{license_id}/seats/{device_id}:
+    delete:
+      summary: Free the seat held by a device.
+      tags:
+      - Seats
+      parameters:
+      - name: license_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: device_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []
+  /v1/admin/audit-log:
+    get:
+      summary: Recent changes to your tenant.
+      tags:
+      - Audit log
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: string
+      - name: next_token
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+        4XX:
+          description: 'Error: {"error": {"code": ..., "message": ...}}'
+      security:
+      - TenantApiKey: []

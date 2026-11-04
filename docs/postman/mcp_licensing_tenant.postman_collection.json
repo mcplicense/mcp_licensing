@@ -1,0 +1,552 @@
+{
+  "info": {
+    "name": "MCP Licensing - Tenant API",
+    "description": "Manage your licenses. Import the environment file, set base_url and tenant_api_key, then run requests. Keys and license keys are shown once.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-Tenant-Api-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{tenant_api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Verify (end user)",
+      "item": [
+        {
+          "name": "POST Check a license key and register this device",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/mcp/verify",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "mcp",
+                "verify"
+              ],
+              "query": []
+            },
+            "description": "Check a license key and register this device. Called by the MCP tool at startup.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"license_key\": \"{{license_key}}\",\n  \"device_id\": \"{{device_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tenant",
+      "item": [
+        {
+          "name": "GET Show your tenant, its status, the limits that apply to it (licenses, seats, API keys, verify requests per minute) and how much of them you use",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/tenant",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "tenant"
+              ],
+              "query": []
+            },
+            "description": "Show your tenant, its status, the limits that apply to it (licenses, seats, API keys, verify requests per minute) and how much of them you use. Creating more than a limit allows returns 403 LIMIT_REACHED."
+          }
+        },
+        {
+          "name": "PATCH Set your default seat lease in seconds (300 to 2592000; null restores the platform default of 24h)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/tenant",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "tenant"
+              ],
+              "query": []
+            },
+            "description": "Set your default seat lease in seconds (300 to 2592000; null restores the platform default of 24h). A device that does not check in within its lease loses its seat automatically.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lease_duration_sec\": 43200\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "PUT Tenant kill switch: suspend or resume all of your licenses",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/tenant/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "tenant",
+                "status"
+              ],
+              "query": []
+            },
+            "description": "Tenant kill switch: suspend or resume all of your licenses. A platform-level disable cannot be lifted here.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"suspended\": true,\n  \"reason\": \"Security incident\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "API keys",
+      "item": [
+        {
+          "name": "GET List your admin API keys",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/api-keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "api-keys"
+              ],
+              "query": []
+            },
+            "description": "List your admin API keys."
+          }
+        },
+        {
+          "name": "POST Create another admin API key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/api-keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "api-keys"
+              ],
+              "query": []
+            },
+            "description": "Create another admin API key. The key is returned once.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"ci pipeline\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.key_id) pm.environment.set('key_id', data.key_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE Revoke an admin API key",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/api-keys/{{key_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "api-keys",
+                "{{key_id}}"
+              ],
+              "query": []
+            },
+            "description": "Revoke an admin API key. The last active key cannot be revoked."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Licenses",
+      "item": [
+        {
+          "name": "GET List licenses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "next_token",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List licenses."
+          }
+        },
+        {
+          "name": "POST Create a license",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses"
+              ],
+              "query": []
+            },
+            "description": "Create a license. The license_key is returned once; give it to the end user. Optional lease_duration_sec overrides the tenant and platform default for this license.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Jane's laptop\",\n  \"seats_max\": 2,\n  \"expires_at\": \"2027-12-31\",\n  \"lease_duration_sec\": 86400\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.license_id) pm.environment.set('license_id', data.license_id);",
+                  "if (data.license_key) pm.environment.set('license_key', data.license_key);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Show one license",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}"
+              ],
+              "query": []
+            },
+            "description": "Show one license."
+          }
+        },
+        {
+          "name": "PATCH Change label, seats_max, expires_at or lease_duration_sec (null clears the override)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}"
+              ],
+              "query": []
+            },
+            "description": "Change label, seats_max, expires_at or lease_duration_sec (null clears the override).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"seats_max\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "PUT Revoke or reinstate one license",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}",
+                "status"
+              ],
+              "query": []
+            },
+            "description": "Revoke or reinstate one license.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"REVOKED\",\n  \"reason\": \"Left the company\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST Issue a new license_key (returned once)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}/rotate-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}",
+                "rotate-key"
+              ],
+              "query": []
+            },
+            "description": "Issue a new license_key (returned once). The old key stops working immediately."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.license_key) pm.environment.set('license_key', data.license_key);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Seats",
+      "item": [
+        {
+          "name": "GET List devices using a license, with each seat's lease_expires_at (epoch seconds) and whether it is active",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}/seats",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}",
+                "seats"
+              ],
+              "query": []
+            },
+            "description": "List devices using a license, with each seat's lease_expires_at (epoch seconds) and whether it is active."
+          }
+        },
+        {
+          "name": "DELETE Free the seat held by a device",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/licenses/{{license_id}}/seats/{{device_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "licenses",
+                "{{license_id}}",
+                "seats",
+                "{{device_id}}"
+              ],
+              "query": []
+            },
+            "description": "Free the seat held by a device."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit log",
+      "item": [
+        {
+          "name": "GET Recent changes to your tenant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/admin/audit-log",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "admin",
+                "audit-log"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "next_token",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Recent changes to your tenant."
+          }
+        }
+      ]
+    }
+  ]
+}

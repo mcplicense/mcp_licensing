@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.aws-sam/
+samconfig.toml
+*.log
+
+# Words that must never appear in the repository (the owner's name and the like): local only
+tests/private_words.json
+

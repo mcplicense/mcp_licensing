@@ -1,0 +1,425 @@
+{
+  "info": {
+    "name": "MCP Licensing - Platform (internal)",
+    "description": "Platform owner operations. Do not share this collection with customers.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-Tenant-Api-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{super_api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Tenants",
+      "item": [
+        {
+          "name": "GET List tenants",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "next_token",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List tenants."
+          }
+        },
+        {
+          "name": "POST Create a tenant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants"
+              ],
+              "query": []
+            },
+            "description": "Create a tenant. Returns its first admin API key once. tenant_id is optional: leave it out and one is generated (mcp-xxxxxx); it becomes the prefix of every license key and can not change.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_name\": \"Acme Inc\",\n  \"email\": \"ops@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.tenant_id) pm.environment.set('tenant_id', data.tenant_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Show a tenant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}"
+              ],
+              "query": []
+            },
+            "description": "Show a tenant."
+          }
+        },
+        {
+          "name": "PATCH Change company_name, email or lease_duration_sec",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}"
+              ],
+              "query": []
+            },
+            "description": "Change company_name, email or lease_duration_sec. A tenant's limits are not set here but in SSM (/mcp/<stage>/tenants/<tenant_id>/limit_*).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_name\": \"Acme Corporation\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "PUT Disable or re-enable one tenant",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}/status",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}",
+                "status"
+              ],
+              "query": []
+            },
+            "description": "Disable or re-enable one tenant. Only the platform can lift this.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"disabled\": true,\n  \"reason\": \"Unpaid invoice\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST Ban a tenant: it is disabled, its owner's login is disabled and signed out, and the owner's email address cannot sign up again",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}/ban",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}",
+                "ban"
+              ],
+              "query": []
+            },
+            "description": "Ban a tenant: it is disabled, its owner's login is disabled and signed out, and the owner's email address cannot sign up again. Reversible with unban.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Abuse\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "POST Undo a ban: the tenant is enabled, the owner can log in again and the address may sign up",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}/unban",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}",
+                "unban"
+              ],
+              "query": []
+            },
+            "description": "Undo a ban: the tenant is enabled, the owner can log in again and the address may sign up."
+          }
+        },
+        {
+          "name": "POST Issue a new tenant admin key (for example when a tenant lost all of theirs)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}/api-keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}",
+                "api-keys"
+              ],
+              "query": []
+            },
+            "description": "Issue a new tenant admin key (for example when a tenant lost all of theirs).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"recovery\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "GET List a tenant's licenses (support)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/tenants/{{tenant_id}}/licenses",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "tenants",
+                "{{tenant_id}}",
+                "licenses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "next_token",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "List a tenant's licenses (support)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Kill switch",
+      "item": [
+        {
+          "name": "GET Show the global kill switch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/kill-switch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "kill-switch"
+              ],
+              "query": []
+            },
+            "description": "Show the global kill switch."
+          }
+        },
+        {
+          "name": "PUT Disable (enabled=true) or restore (enabled=false) every tenant at once",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/super/kill-switch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "kill-switch"
+              ],
+              "query": []
+            },
+            "description": "Disable (enabled=true) or restore (enabled=false) every tenant at once.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"reason\": \"Incident response\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit log",
+      "item": [
+        {
+          "name": "GET Platform-level audit events",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/super/audit-log",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "v1",
+                "super",
+                "audit-log"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "next_token",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Platform-level audit events."
+          }
+        }
+      ]
+    }
+  ]
+}

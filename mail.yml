@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  MCP tool licensing - mail for the domain: SES sending identity (DKIM, SPF,
+  DMARC) and inbound mail forwarded to one inbox. Deploy in us-east-1 with
+  sam build/deploy --template-file mail.yml (see README, Mail).
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: The domain, for example mcplicense.net.
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Route 53 hosted zone that contains DomainName.
+  ForwardTo:
+    Type: String
+    Description: >-
+      The inbox that receives mail sent to support@, abuse@ and postmaster@ the
+      domain. Give it at deploy time: it is never in the repository or on the website.
+  VerifyForwardTo:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      While SES is in sandbox it only sends to verified addresses, so this
+      creates a verification email to ForwardTo (click it once). Set to false
+      after SES production access is granted.
+  LambdaRuntime:
+    Type: String
+    Default: python3.12
+    AllowedValues: [python3.12, python3.13, python3.14]
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Conditions:
+  VerifyForward: !Equals [!Ref VerifyForwardTo, 'true']
+
+Resources:
+
+  # ---------------------------------------------------------------- sending
+  # The domain identity lets mail go out as anything@domain. DKIM signs it
+  # (the three CNAMEs below), the MAIL FROM subdomain makes SPF line up, and
+  # DMARC tells receivers to quarantine mail from the domain that fails both.
+  Identity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref DomainName
+      DkimAttributes:
+        SigningEnabled: true
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+      MailFromAttributes:
+        MailFromDomain: !Sub mail.${DomainName}
+        BehaviorOnMxFailure: USE_DEFAULT_VALUE
+
+  DkimRecord1:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName1
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue1]
+
+  DkimRecord2:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName2
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue2]
+
+  DkimRecord3:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !GetAtt Identity.DkimDNSTokenName3
+      Type: CNAME
+      TTL: '1800'
+      ResourceRecords: [!GetAtt Identity.DkimDNSTokenValue3]
+
+  MailFromMx:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub mail.${DomainName}
+      Type: MX
+      TTL: '300'
+      ResourceRecords: [!Sub '10 feedback-smtp.${AWS::Region}.amazonses.com']
+
+  MailFromSpf:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub mail.${DomainName}
+      Type: TXT
+      TTL: '300'
+      ResourceRecords: ['"v=spf1 include:amazonses.com ~all"']
+
+  DomainSpf:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: TXT
+      TTL: '300'
+      ResourceRecords: ['"v=spf1 include:amazonses.com ~all"']
+
+  Dmarc:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub _dmarc.${DomainName}
+      Type: TXT
+      TTL: '300'
+      ResourceRecords: ['"v=DMARC1; p=quarantine; pct=100; adkim=r; aspf=r"']
+
+  # SES refuses to send to an address it has not verified while the account is
+  # in sandbox. This sends one verification email to the inbox.
+  ForwardToIdentity:
+    Type: AWS::SES::EmailIdentity
+    Condition: VerifyForward
+    Properties:
+      EmailIdentity: !Ref ForwardTo
+
+  # --------------------------------------------------------------- receiving
+  InboundMx:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: MX
+      TTL: '300'
+      ResourceRecords: [!Sub '10 inbound-smtp.${AWS::Region}.amazonaws.com']
+
+  # Raw inbound messages. Private, encrypted, and deleted after 30 days.
+  InboundBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-inbound-mail
+            Status: Enabled
+            ExpirationInDays: 30
+
+  InboundBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref InboundBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SesMayStoreMessagesFromThisRuleSet
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub ${InboundBucket.Arn}/inbound/*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              StringLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/mcp-licensing-inbound:receipt-rule/*
+          - Sid: RefuseUnencryptedTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt InboundBucket.Arn
+              - !Sub ${InboundBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  ForwarderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: mcp-licensing-mail-forwarder
+      Description: Forwards inbound mail for the domain to one inbox.
+      Handler: forwarder.handler
+      CodeUri: mail/
+      Runtime: !Ref LambdaRuntime
+      Architectures: [arm64]
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          BUCKET: !Ref InboundBucket
+          PREFIX: inbound/
+          FORWARD_TO: !Ref ForwardTo
+          FROM_ADDRESS: !Sub support@${DomainName}
+      LoggingConfig:
+        LogGroup: !Ref ForwarderLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${InboundBucket.Arn}/inbound/*
+            # While SES is in sandbox it also checks the permission on the RECIPIENT's identity
+            # (the inbox), so both identities are listed; the condition still pins the sender.
+            - Effect: Allow
+              Action: ses:SendRawEmail
+              Resource:
+                - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${DomainName}
+                - !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${ForwardTo}
+              Condition:
+                StringEquals:
+                  ses:FromAddress: !Sub support@${DomainName}
+
+  ForwarderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/mcp-licensing-mail-forwarder
+      RetentionInDays: !Ref LogRetentionDays
+
+  SesMayInvokeForwarder:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ForwarderFunction
+      Action: lambda:InvokeFunction
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/mcp-licensing-inbound:receipt-rule/forward
+
+  # SES allows one ACTIVE receipt rule set per region and CloudFormation cannot
+  # activate one: after the first deploy run the command in the README.
+  RuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: mcp-licensing-inbound
+
+  ForwardRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn: [InboundBucketPolicy, SesMayInvokeForwarder]
+    Properties:
+      RuleSetName: !Ref RuleSet
+      Rule:
+        Name: forward
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Optional
+        Recipients:
+          - !Sub support@${DomainName}
+          - !Sub abuse@${DomainName}
+          - !Sub postmaster@${DomainName}
+        Actions:
+          - S3Action:
+              BucketName: !Ref InboundBucket
+              ObjectKeyPrefix: inbound/
+          - LambdaAction:
+              FunctionArn: !GetAtt ForwarderFunction.Arn
+              InvocationType: Event
+
+  # ------------------------------------------------------------------ alarm
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: mcp-licensing-mail-alarms
+
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref ForwardTo
+
+  ForwarderErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: mcp-licensing-mail-forwarder-errors
+      AlarmDescription: The inbound mail forwarder failed; the message is still in the inbound bucket for 30 days.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ForwarderFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+Outputs:
+  SmtpEndpoint:
+    Description: 'SMTP host for "Send mail as" in the inbox (port 587, STARTTLS). Credentials come from scripts/smtp_credentials.py.'
+    Value: !Sub email-smtp.${AWS::Region}.amazonaws.com
+  FromAddress:
+    Value: !Sub support@${DomainName}
+  InboundBucketName:
+    Value: !Ref InboundBucket
+  ActivateCommand:
+    Description: Run once after the first deploy.
+    Value: aws ses set-active-receipt-rule-set --rule-set-name mcp-licensing-inbound --region us-east-1

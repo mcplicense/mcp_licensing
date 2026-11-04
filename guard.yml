@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  MCP tool licensing - spending guard: a monthly AWS Budget that emails when the account's cost passes
+  50% and 80% of the limit, and when the forecast passes 100%. Deploy it in us-east-1 (Budgets is global).
+  The budget covers the whole AWS account, not just this service, so size the limit for everything in it.
+  To change AlertEmail, delete the stack and deploy it again: CloudFormation cannot swap a budget's recipients
+  in place.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-z][a-z0-9-]{1,15}$'
+  AlertEmail:
+    Type: String
+    Description: Address that receives the budget alerts.
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    Description: Monthly cost limit for the whole account, in US dollars.
+
+Resources:
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub mcp-licensing-${Stage}-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail

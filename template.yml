@@ -1,0 +1,692 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: MCP tool licensing - HTTP API, Python Lambda, DynamoDB on-demand.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment stage. dev and prod are deployed to different regions.
+  LambdaRuntime:
+    Type: String
+    Default: python3.12
+    AllowedValues: [python3.12, python3.13, python3.14]
+    Description: >-
+      The code is written for Python 3.11 and tested on 3.12. AWS no longer
+      allows creating new python3.11 functions (creation was disabled
+      2026-07-31), so the default is python3.12.
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+  VerifyRateLimit:
+    Type: Number
+    Default: 100
+    Description: Steady-state requests per second allowed on POST /v1/mcp/verify.
+  VerifyBurstLimit:
+    Type: Number
+    Default: 200
+  ManagementRateLimit:
+    Type: Number
+    Default: 10
+    Description: Steady-state requests per second for /v1/admin and /v1/super routes.
+  ManagementBurstLimit:
+    Type: Number
+    Default: 20
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >-
+      Shared secret that the CloudFront distribution (edge.yml) sends in the
+      X-Origin-Verify header. The Lambdas refuse requests without it, so WAF
+      cannot be bypassed through the raw API Gateway URL. Required for prod;
+      leave empty for dev.
+  OriginSecretPrevious:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >-
+      The old secret, kept for the minutes it takes to rotate OriginSecret so
+      requests in flight are not refused. Empty otherwise.
+  ContactEmail:
+    Type: String
+    Default: ''
+    Description: >-
+      Where the website's contact form messages are emailed (an SNS email
+      subscription; the address owner confirms it once). Give it at deploy time:
+      it is never in the repository or on the website.
+  EmailDomain:
+    Type: String
+    Default: ''
+    Description: >-
+      The domain verified in SES, for example mcplicense.net. When set, the sign-up emails (the
+      verification and password reset codes) are sent from no-reply@<domain> through SES. Empty uses
+      Cognito's own sender, which is capped at 50 emails a day (fine for dev).
+  SiteOrigin:
+    Type: String
+    Default: ''
+    Description: >-
+      The website's origin, for example https://mcplicense.net. When set, the
+      contact form accepts only posts that come from that site. Empty in dev.
+
+Conditions:
+  HasContactEmail: !Not [!Equals [!Ref ContactEmail, '']]
+  UseSesEmail: !Not [!Equals [!Ref EmailDomain, '']]
+
+Rules:
+  ProdNeedsOriginSecret:
+    RuleCondition: !Equals [!Ref Stage, prod]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref OriginSecret, '']]
+        AssertDescription: Stage=prod requires OriginSecret, otherwise the API is reachable without WAF.
+
+Globals:
+  Function:
+    Runtime: !Ref LambdaRuntime
+    Architectures: [arm64]
+    Timeout: 10
+    MemorySize: 256
+    CodeUri: src/
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        SSM_PREFIX: !Sub /mcp/${Stage}
+        # Management functions read SSM on every request, so a change applies to
+        # the next call. The verify function overrides this (see McpFunction).
+        CONFIG_CACHE_SECONDS: '0'
+        TENANT_TABLE: !Ref TenantDetailTable
+        LICENSE_TABLE: !Ref LicenseDetailTable
+        SEAT_TABLE: !Ref LicenseSeatTable
+        API_KEY_TABLE: !Ref ApiKeyTable
+        AUDIT_TABLE: !Ref AuditLogTable
+        CONTROL_TABLE: !Ref PlatformControlTable
+        RATE_TABLE: !Ref RateCounterTable
+        BANNED_TABLE: !Ref BannedEmailTable
+        USER_POOL_ID: !Ref UserPool
+        USER_POOL_CLIENT_ID: !Ref UserPoolClient
+        ORIGIN_SECRET: !Ref OriginSecret
+        ORIGIN_SECRET_PREVIOUS: !Ref OriginSecretPrevious
+
+Resources:
+
+  # ---------------------------------------------------------------- tables
+  # Table names are fixed. dev and prod live in different regions, so the
+  # names do not collide. All tables are on-demand and retained on stack delete.
+
+  TenantDetailTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_tenant_detail
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+
+  LicenseDetailTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_license_detail
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: license_id
+          AttributeType: S
+        - AttributeName: key_hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: license_id
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: key_hash_index
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: key_hash
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  LicenseSeatTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_license_seat
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: seat_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: seat_id
+          KeyType: RANGE
+
+  ApiKeyTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_api_key
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: key_id
+          AttributeType: S
+        - AttributeName: tenant_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: key_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: tenant_id_index
+          KeySchema:
+            - AttributeName: tenant_id
+              KeyType: HASH
+            - AttributeName: key_id
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_audit_log
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: tenant_id
+          AttributeType: S
+        - AttributeName: event_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: tenant_id
+          KeyType: HASH
+        - AttributeName: event_id
+          KeyType: RANGE
+
+  PlatformControlTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_platform_control
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: control_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: control_key
+          KeyType: HASH
+
+  # Per-tenant request counters for verify, one item per tenant per minute.
+  # The items are disposable (DynamoDB TTL removes them), so this table is
+  # not retained and has no point-in-time recovery.
+  RateCounterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: mcp_rate_counter
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: bucket
+          AttributeType: S
+      KeySchema:
+        - AttributeName: bucket
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  # Email addresses of banned tenants' owners (hashed), checked at sign-up.
+  BannedEmailTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_banned_email
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: email_hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email_hash
+          KeyType: HASH
+
+  # ------------------------------------------------------------ identity
+  # The people who sign up (tenant admins on the website). The pool is RETAINED and protected
+  # from deletion: replacing or deleting it would delete every user. Settings that cannot be changed
+  # after creation (sign-in by email, the custom attributes) are pinned by tests, so an edit that
+  # would force a replacement fails the build first.
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub mcp-licensing-${Stage}-tenants
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 1
+      MfaConfiguration: OPTIONAL
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        # The tenant of this person. The app client cannot write it: only the portal sets it.
+        - Name: tenant_id
+          AttributeDataType: String
+          Mutable: true
+          StringAttributeConstraints:
+            MinLength: '0'
+            MaxLength: '32'
+        - Name: company
+          AttributeDataType: String
+          Mutable: true
+          StringAttributeConstraints:
+            MinLength: '0'
+            MaxLength: '200'
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your MCP Licensing code
+        EmailMessage: 'Your MCP Licensing code is {####}. Enter it on the page that asked for it. If you did not ask for a code, you can ignore this email.'
+      EmailConfiguration: !If
+        - UseSesEmail
+        - EmailSendingAccount: DEVELOPER
+          From: !Sub MCP Licensing <no-reply@${EmailDomain}>
+          ReplyToEmailAddress: !Sub support@${EmailDomain}
+          SourceArn: !Sub arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}
+        - !Ref AWS::NoValue
+
+  # Only the portal Lambda holds this client's secret, so only the portal can sign people up
+  # or in. Tokens last 15 minutes; the refresh token (kept in an HttpOnly cookie) 12 hours.
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub mcp-licensing-${Stage}-portal
+      GenerateSecret: true
+      ExplicitAuthFlows: [ALLOW_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 12
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: hours
+      ReadAttributes: [email, email_verified, 'custom:tenant_id', 'custom:company']
+      WriteAttributes: [email, 'custom:company']
+
+  # ------------------------------------------------------ SSM settings
+  # The settings live in SSM Parameter Store under /mcp/<stage>/ (platform
+  # defaults) and /mcp/<stage>/tenants/<tenant_id>/ (limit_* overrides for one
+  # tenant). They are data the operator owns, not infrastructure, so this
+  # template does not create them: scripts/seed_config.py creates the missing
+  # ones and never overwrites a value you have set. The Lambdas fall back to the
+  # defaults built into src/core/config.py for any that do not exist.
+
+  # -------------------------------------------------------------- API
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      # Only the /v1/console routes name this authorizer. It checks the ID token's signature,
+      # issuer and audience; the Lambda then reads the verified claims.
+      Auth:
+        Authorizers:
+          TenantJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience:
+                - !Ref UserPoolClient
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref ManagementRateLimit
+        ThrottlingBurstLimit: !Ref ManagementBurstLimit
+      RouteSettings:
+        POST /v1/mcp/verify:
+          ThrottlingRateLimit: !Ref VerifyRateLimit
+          ThrottlingBurstLimit: !Ref VerifyBurstLimit
+
+  # --------------------------------------------------------- functions
+  McpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-licensing-${Stage}-mcp
+      Description: Runtime license verification (/v1/mcp/*).
+      Handler: handlers.mcp.handler
+      Environment:
+        Variables:
+          # Verify can run 100 times a second and SSM allows about 40 reads a
+          # second by default, so a warm container reuses what it read for a minute.
+          CONFIG_CACHE_SECONDS: '60'
+      LoggingConfig:
+        LogGroup: !Ref McpLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParametersByPath
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}/*
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource:
+                - !GetAtt TenantDetailTable.Arn
+                - !GetAtt PlatformControlTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource:
+                - !GetAtt LicenseDetailTable.Arn
+                - !Sub ${LicenseDetailTable.Arn}/index/*
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+              Resource: !GetAtt LicenseSeatTable.Arn
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt RateCounterTable.Arn
+      Events:
+        Verify:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /v1/mcp/verify
+            Method: POST
+
+  AdminFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-licensing-${Stage}-admin
+      Description: Tenant admin API (/v1/admin/*).
+      Handler: handlers.admin.handler
+      LoggingConfig:
+        LogGroup: !Ref AdminLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParametersByPath
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}/*
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt TenantDetailTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt LicenseDetailTable.Arn
+                - !Sub ${LicenseDetailTable.Arn}/index/*
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+              Resource: !GetAtt LicenseSeatTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt ApiKeyTable.Arn
+                - !Sub ${ApiKeyTable.Arn}/index/*
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:Query]
+              Resource: !GetAtt AuditLogTable.Arn
+      Events:
+        GetTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/tenant, Method: GET}}
+        UpdateTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/tenant, Method: PATCH}}
+        SetTenantStatus: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/tenant/status, Method: PUT}}
+        ListApiKeys: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/api-keys, Method: GET}}
+        CreateApiKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/api-keys, Method: POST}}
+        RevokeApiKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/api-keys/{key_id}', Method: DELETE}}
+        ListLicenses: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/licenses, Method: GET}}
+        CreateLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/licenses, Method: POST}}
+        GetLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}', Method: GET}}
+        UpdateLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}', Method: PATCH}}
+        SetLicenseStatus: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}/status', Method: PUT}}
+        RotateLicenseKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}/rotate-key', Method: POST}}
+        ListSeats: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}/seats', Method: GET}}
+        ReleaseSeat: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/admin/licenses/{license_id}/seats/{device_id}', Method: DELETE}}
+        AuditLog: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/admin/audit-log, Method: GET}}
+        ConsoleGetTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/tenant, Method: GET, Auth: {Authorizer: TenantJwt}}}
+        ConsoleUpdateTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/tenant, Method: PATCH, Auth: {Authorizer: TenantJwt}}}
+        ConsoleSetTenantStatus: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/tenant/status, Method: PUT, Auth: {Authorizer: TenantJwt}}}
+        ConsoleListApiKeys: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/api-keys, Method: GET, Auth: {Authorizer: TenantJwt}}}
+        ConsoleCreateApiKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/api-keys, Method: POST, Auth: {Authorizer: TenantJwt}}}
+        ConsoleRevokeApiKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/api-keys/{key_id}', Method: DELETE, Auth: {Authorizer: TenantJwt}}}
+        ConsoleListLicenses: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/licenses, Method: GET, Auth: {Authorizer: TenantJwt}}}
+        ConsoleCreateLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/licenses, Method: POST, Auth: {Authorizer: TenantJwt}}}
+        ConsoleGetLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}', Method: GET, Auth: {Authorizer: TenantJwt}}}
+        ConsoleUpdateLicense: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}', Method: PATCH, Auth: {Authorizer: TenantJwt}}}
+        ConsoleSetLicenseStatus: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}/status', Method: PUT, Auth: {Authorizer: TenantJwt}}}
+        ConsoleRotateLicenseKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}/rotate-key', Method: POST, Auth: {Authorizer: TenantJwt}}}
+        ConsoleListSeats: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}/seats', Method: GET, Auth: {Authorizer: TenantJwt}}}
+        ConsoleReleaseSeat: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/console/licenses/{license_id}/seats/{device_id}', Method: DELETE, Auth: {Authorizer: TenantJwt}}}
+        ConsoleAuditLog: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/console/audit-log, Method: GET, Auth: {Authorizer: TenantJwt}}}
+
+  SuperFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-licensing-${Stage}-super
+      Description: Platform owner API (/v1/super/*).
+      Handler: handlers.super_admin.handler
+      LoggingConfig:
+        LogGroup: !Ref SuperLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParametersByPath
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}/*
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Scan]
+              Resource: !GetAtt TenantDetailTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt LicenseDetailTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt ApiKeyTable.Arn
+                - !Sub ${ApiKeyTable.Arn}/index/*
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:Query]
+              Resource: !GetAtt AuditLogTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt PlatformControlTable.Arn
+            # A ban: the banned address is recorded, and the owner's login is disabled.
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !GetAtt BannedEmailTable.Arn
+            - Effect: Allow
+              Action: [cognito-idp:AdminDisableUser, cognito-idp:AdminEnableUser, cognito-idp:AdminUserGlobalSignOut]
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        ListTenants: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/super/tenants, Method: GET}}
+        CreateTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/super/tenants, Method: POST}}
+        GetTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}', Method: GET}}
+        UpdateTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}', Method: PATCH}}
+        SetTenantStatus: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}/status', Method: PUT}}
+        BanTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}/ban', Method: POST}}
+        UnbanTenant: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}/unban', Method: POST}}
+        IssueTenantApiKey: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}/api-keys', Method: POST}}
+        ListTenantLicenses: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: '/v1/super/tenants/{tenant_id}/licenses', Method: GET}}
+        GetKillSwitch: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/super/kill-switch, Method: GET}}
+        SetKillSwitch: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/super/kill-switch, Method: PUT}}
+        AuditLog: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/super/audit-log, Method: GET}}
+
+  # Sign-up, login and password reset for the website (/v1/portal/*). The only holder of the
+  # user pool client's secret; its permissions are the narrowest that can create a tenant.
+  PortalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-licensing-${Stage}-portal
+      Description: Self-service sign-up and login (/v1/portal/*).
+      Handler: handlers.portal.handler
+      Environment:
+        Variables:
+          USER_POOL_CLIENT_SECRET: !GetAtt UserPoolClient.ClientSecret
+          NOTIFY_TOPIC_ARN: !Ref ContactTopic
+          SITE_ORIGIN: !Ref SiteOrigin
+      LoggingConfig:
+        LogGroup: !Ref PortalLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParametersByPath
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}/*
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref ContactTopic
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt TenantDetailTable.Arn
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt BannedEmailTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !GetAtt RateCounterTable.Arn
+            - Effect: Allow
+              Action: [cognito-idp:AdminGetUser, cognito-idp:AdminUpdateUserAttributes]
+              Resource: !GetAtt UserPool.Arn
+      Events:
+        Signup: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/signup, Method: POST}}
+        Resend: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/resend, Method: POST}}
+        Confirm: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/confirm, Method: POST}}
+        Login: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/login, Method: POST}}
+        Refresh: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/refresh, Method: POST}}
+        Logout: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/logout, Method: POST}}
+        Forgot: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/forgot, Method: POST}}
+        Reset: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/portal/reset, Method: POST}}
+
+  PortalLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-licensing-${Stage}-portal
+      RetentionInDays: !Ref LogRetentionDays
+
+  # The website's contact form. Messages go to an SNS topic whose email
+  # subscription is the owner, so the owner's address is never on the site.
+  ContactTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub mcp-licensing-${Stage}-contact
+
+  ContactSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasContactEmail
+    Properties:
+      TopicArn: !Ref ContactTopic
+      Protocol: email
+      Endpoint: !Ref ContactEmail
+
+  ContactFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub mcp-licensing-${Stage}-contact
+      Description: Website contact form (/v1/site/contact).
+      Handler: handlers.contact.handler
+      Environment:
+        Variables:
+          CONTACT_TOPIC_ARN: !Ref ContactTopic
+          SITE_ORIGIN: !Ref SiteOrigin
+      LoggingConfig:
+        LogGroup: !Ref ContactLogGroup
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParametersByPath
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcp/${Stage}/*
+            - Effect: Allow
+              Action: sns:Publish
+              Resource: !Ref ContactTopic
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !GetAtt RateCounterTable.Arn
+      Events:
+        Contact: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/site/contact, Method: POST}}
+
+  ContactLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-licensing-${Stage}-contact
+      RetentionInDays: !Ref LogRetentionDays
+
+  McpLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-licensing-${Stage}-mcp
+      RetentionInDays: !Ref LogRetentionDays
+
+  AdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-licensing-${Stage}-admin
+      RetentionInDays: !Ref LogRetentionDays
+
+  SuperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/mcp-licensing-${Stage}-super
+      RetentionInDays: !Ref LogRetentionDays
+
+Outputs:
+  ApiUrl:
+    Description: >-
+      Raw API Gateway URL for this stage. With OriginSecret set it refuses
+      direct calls; use the CloudFront domain from edge.yml instead.
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}
+  ApiId:
+    Description: Pass as ApiId to edge.yml and site.yml.
+    Value: !Ref HttpApi
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
