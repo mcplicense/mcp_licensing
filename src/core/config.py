@@ -44,6 +44,7 @@ DEFAULTS = {
     "contact_ip_attempts": "3",
     "contact_ip_lock_seconds": "1800",
     "contact_daily_cap": "100",
+    "contact_spam_filter": "1",
     "signup_ip_attempts": "3",
     "signup_ip_lock_seconds": "1800",
     "signup_email_per_hour": "3",

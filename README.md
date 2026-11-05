@@ -99,6 +99,7 @@ from SSM and never touch code, DynamoDB or a deploy:
 | `contact_ip_attempts` | 3 | contact form messages one visitor may send before the lock |
 | `contact_ip_lock_seconds` | 1800 | how long that lock lasts (30 minutes) |
 | `contact_daily_cap` | 100 | contact form messages accepted per day in total |
+| `contact_spam_filter` | 1 | 1 drops contact form messages with a link or a sales phrase (silently); 0 switches it off |
 | `signup_ip_attempts` | 3 | sign-up, resend and password-reset requests one visitor may make before the lock |
 | `signup_ip_lock_seconds` | 1800 | how long that lock lasts (30 minutes) |
 | `signup_email_per_hour` | 3 | emails (codes) sent to one address per hour |
@@ -373,8 +374,10 @@ query strings, API keys or the viewer's Host header.
   visitor is redirected to `/contact/thanks/`. Nothing is stored; logs record only that a message was sent.
 * **Abuse protection, in order:** the post must come from the site (`SITE_ORIGIN`: Origin or Referer); a hidden
   field that only a bot fills in (answered like success, nothing sent, but it counts as an attempt); **3 messages
-  per visitor, then a 30-minute lock** (the 4th starts the lock; the count restarts after 30 idle minutes); a daily
-  cap on the whole form (100); size limits; WAF rate rule `rate-contact` (10 per 10 minutes per IP) in front.
+  per visitor, then a 30-minute lock** (the 4th starts the lock; the count restarts after 30 idle minutes); a
+  **spam filter** (a link, or a sales phrase such as "SEO" or "backlinks", in the name or message: answered like
+  success, nothing sent, the log records only the reason; the rules are in `src/core/spam.py` and
+  `contact_spam_filter=0` switches it off); a daily cap on the whole form (100); size limits; WAF rate rule `rate-contact` (10 per 10 minutes per IP) in front.
   The three numbers are SSM settings above.
 * **Who is "a visitor":** the IPv4 address, or the IPv6 /64 (one subscriber holds a whole /64), read from
   `CloudFront-Viewer-Address`, which CloudFront sets itself. `X-Forwarded-For` is ignored because a visitor can

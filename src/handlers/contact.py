@@ -7,7 +7,9 @@ the message goes to the owner's inbox and the logs record only that one was sent
 
 Abuse protection, cheapest first: the request must come from the site (Origin
 or Referer), a hidden field that only a bot fills in, a per-visitor attempt
-limit (3, then a 30-minute lock), a daily cap on the whole form, and size limits.
+limit (3, then a 30-minute lock), a spam filter (links and sales phrases, see
+core/spam.py: such a message is dropped silently and still counts as an attempt),
+a daily cap on the whole form, and size limits.
 WAF rate-limits the path in front of all this. Neither the recipient's address
 nor any other detail of the owner appears here: the subscription lives on the
 SNS topic.
@@ -21,7 +23,7 @@ import urllib.parse
 
 import boto3
 
-from core import clientip, config, store
+from core import clientip, config, spam, store
 from core.http import from_our_site, make_handler
 
 logger = logging.getLogger()
@@ -144,6 +146,12 @@ def submit(event):
     if _clean(form.get(HONEYPOT), 50):  # a bot filled in the hidden field: look like success
         logger.warning("contact form: honeypot filled")
         return _redirect(THANKS)
+
+    if config.get_int("contact_spam_filter"):  # 0 switches the filter off (SSM) if it ever drops a real message
+        why = spam.reason(name, message)
+        if why:
+            logger.warning("contact form: filtered as spam (%s)", why)
+            return _redirect(THANKS)
 
     sent_today, _ = store.take_window_slot("contact-day", "all", config.get_int("contact_daily_cap"), 86400)
     if not sent_today:

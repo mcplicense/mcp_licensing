@@ -40,6 +40,7 @@ DESCRIPTIONS = {
     "contact_ip_attempts": "Contact form messages one visitor (IPv4 address or IPv6 /64) may send before being locked out.",
     "contact_ip_lock_seconds": "How long a visitor who used up their contact form attempts is locked out (1800 = 30 minutes).",
     "contact_daily_cap": "Contact form messages accepted per day in total, whoever sends them.",
+    "contact_spam_filter": "1 drops contact form messages that contain a link or a sales phrase (silently); 0 switches the filter off.",
     "signup_ip_attempts": "Sign-up, resend and password-reset requests one visitor may make before being locked out.",
     "signup_ip_lock_seconds": "How long that lock lasts (1800 = 30 minutes).",
     "signup_email_per_hour": "Emails (codes) sent to one address per hour by sign-up, resend and password reset.",

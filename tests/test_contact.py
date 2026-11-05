@@ -265,3 +265,55 @@ def test_the_logs_do_not_contain_the_message(sns, caplog):
     caplog.set_level("INFO")
     post(good(message="a private message with a marker word: zebra-marker-42"))
     assert "zebra-marker-42" not in caplog.text and "jane@example.com" not in caplog.text
+
+
+# ------------------------------------------------------------------ spam filter
+
+SPAM = good(message="We offer customized SEO services to grow your website traffic. Reply for a proposal.")
+LINKED = good(message="Hello https://example.com/offer, I wanted to reach out about something unrelated.")
+
+
+@pytest.mark.parametrize("form", [SPAM, LINKED, good(name="www.spam.example")])
+def test_spam_is_dropped_silently_and_looks_like_success(sns, clock, form, caplog):
+    with caplog.at_level("WARNING"):
+        response = post(form)
+    assert is_thanks(response)  # the same answer an honest sender gets
+    assert sns.published == []
+    assert "filtered as spam" in caplog.text
+    assert "customized" not in caplog.text and "example.com" not in caplog.text  # the reason only, never the message
+
+
+def test_a_filtered_message_is_not_published_and_the_next_honest_one_is(sns, clock):
+    assert is_thanks(post(SPAM))
+    assert sns.published == []
+    assert is_thanks(post(good(), ip="198.51.100.5"))
+    assert len(sns.published) == 1
+
+
+def test_spam_still_counts_toward_the_visitors_attempts(sns, clock):
+    for _ in range(3):
+        assert is_thanks(post(SPAM))
+    assert post(SPAM)["statusCode"] == 429  # the 4th attempt starts the lock, as for any message
+    assert sns.published == []
+
+
+def test_spam_does_not_use_up_the_daily_cap(sns, clock, monkeypatch):
+    monkeypatch.setenv("SSM_PREFIX", "/mcp/test")
+    boto3.client("ssm").put_parameter(Name="/mcp/test/contact_daily_cap", Value="1", Type="String")
+    config.reset_cache()
+    post(SPAM, ip="198.51.100.1")
+    post(SPAM, ip="198.51.100.2")
+    assert is_thanks(post(good(), ip="198.51.100.3"))
+    assert len(sns.published) == 1
+
+
+def test_the_filter_can_be_switched_off_in_ssm(sns, clock, monkeypatch):
+    monkeypatch.setenv("SSM_PREFIX", "/mcp/test")
+    boto3.client("ssm").put_parameter(Name="/mcp/test/contact_spam_filter", Value="0", Type="String")
+    config.reset_cache()
+    assert is_thanks(post(SPAM))
+    assert len(sns.published) == 1
+
+
+def test_the_filter_is_on_by_default():
+    assert config.DEFAULTS["contact_spam_filter"] == "1"
