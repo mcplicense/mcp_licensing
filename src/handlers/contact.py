@@ -7,8 +7,9 @@ the message goes to the owner's inbox and the logs record only that one was sent
 
 Abuse protection, cheapest first: the request must come from the site (Origin
 or Referer), a hidden field that only a bot fills in, a per-visitor attempt
-limit (3, then a 30-minute lock), a spam filter (links and sales phrases, see
-core/spam.py: such a message is dropped silently and still counts as an attempt),
+limit (3, then a 30-minute lock), a spam filter (a link, or a phrase from the
+mcp_spam_phrase table, see core/spam.py: such a message is dropped silently and
+still counts as an attempt),
 a daily cap on the whole form, and size limits.
 WAF rate-limits the path in front of all this. Neither the recipient's address
 nor any other detail of the owner appears here: the subscription lives on the
@@ -41,6 +42,7 @@ MAX_EMAIL = 200
 MIN_MESSAGE = 10
 MAX_MESSAGE = 2000
 HONEYPOT = "website"
+SPAM_SCOPE = "contact"
 THANKS = "/contact/thanks/"
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+'-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # everything but tab and newline
@@ -110,6 +112,19 @@ def _message_text(topic, name, email, message, country):
              when=store.now_iso(), message=message)
 
 
+def _spam_phrases():
+    """The usable phrases of the 'contact' rows of the spam table, or None (the built-in list applies) when
+    it cannot be read or holds nothing usable."""
+    try:
+        phrases, skipped = spam.phrases_from_rows(store.spam_rows(SPAM_SCOPE))
+    except Exception:
+        logger.exception("contact form: could not read the spam phrases; using the built-in list")
+        return None
+    if skipped:
+        logger.warning("contact form: %d spam phrase entries were skipped as unusable", skipped)
+    return phrases or None
+
+
 def submit(event):
     try:
         form = _fields(event)
@@ -148,7 +163,7 @@ def submit(event):
         return _redirect(THANKS)
 
     if config.get_int("contact_spam_filter"):  # 0 switches the filter off (SSM) if it ever drops a real message
-        why = spam.reason(name, message)
+        why = spam.reason(name, message, _spam_phrases())
         if why:
             logger.warning("contact form: filtered as spam (%s)", why)
             return _redirect(THANKS)

@@ -103,6 +103,7 @@ Globals:
         CONTROL_TABLE: !Ref PlatformControlTable
         RATE_TABLE: !Ref RateCounterTable
         BANNED_TABLE: !Ref BannedEmailTable
+        SPAM_TABLE: !Ref SpamPhraseTable
         USER_POOL_ID: !Ref UserPool
         USER_POOL_CLIENT_ID: !Ref UserPoolClient
         ORIGIN_SECRET: !Ref OriginSecret
@@ -261,6 +262,29 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expires_at
         Enabled: true
+
+  # Phrases that mark a contact form message as spam, edited by hand (console, CSV import or
+  # scripts/spam_phrases.py). One row per group: scope (which form), name (any label) and phrases
+  # (comma or line separated), enabled, note. Plain phrases only, never patterns.
+  SpamPhraseTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: mcp_spam_phrase
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: scope
+          AttributeType: S
+        - AttributeName: name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: scope
+          KeyType: HASH
+        - AttributeName: name
+          KeyType: RANGE
 
   # Email addresses of banned tenants' owners (hashed), checked at sign-up.
   BannedEmailTable:
@@ -650,6 +674,9 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
               Resource: !GetAtt RateCounterTable.Arn
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !GetAtt SpamPhraseTable.Arn
       Events:
         Contact: {Type: HttpApi, Properties: {ApiId: !Ref HttpApi, Path: /v1/site/contact, Method: POST}}
 

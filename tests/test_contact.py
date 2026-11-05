@@ -317,3 +317,69 @@ def test_the_filter_can_be_switched_off_in_ssm(sns, clock, monkeypatch):
 
 def test_the_filter_is_on_by_default():
     assert config.DEFAULTS["contact_spam_filter"] == "1"
+
+
+# ------------------------------------------------- the phrases come from the table
+
+def add_row(name, phrases, enabled=True, scope="contact"):
+    store._table("SPAM_TABLE").put_item(Item={"scope": scope, "name": name, "phrases": phrases, "enabled": enabled})
+
+
+def pitch(text):
+    return good(message=text)
+
+
+GADGET = "Our new gadget offer is unmissable this week, reply for the catalogue."
+
+
+def test_a_phrase_added_to_the_table_takes_effect_on_the_next_post(sns, clock):
+    assert is_thanks(post(pitch(GADGET), ip="198.51.100.1"))
+    assert len(sns.published) == 1  # nothing in the table or the fallback matches: delivered
+    add_row("custom", "gadget offer")
+    assert is_thanks(post(pitch(GADGET), ip="198.51.100.2"))
+    assert len(sns.published) == 1  # now filtered, with no deploy and no cache to wait for
+
+
+def test_a_disabled_row_is_ignored(sns, clock):
+    add_row("custom", "gadget offer", enabled=False)
+    add_row("other", "something else entirely")
+    assert is_thanks(post(pitch(GADGET)))
+    assert len(sns.published) == 1
+
+
+def test_another_scope_does_not_apply_to_the_contact_form(sns, clock):
+    add_row("signup", "gadget offer", scope="signup")
+    assert is_thanks(post(pitch(GADGET)))
+    assert len(sns.published) == 1
+
+
+def test_the_table_list_replaces_the_builtin_one_once_it_has_phrases(sns, clock):
+    add_row("custom", "gadget offer")
+    # "SEO" is only in the built-in fallback, which no longer applies
+    assert is_thanks(post(good(message="Our SEO team can help you with a website review."), ip="198.51.100.3"))
+    assert len(sns.published) == 1
+
+
+def test_an_empty_table_falls_back_to_the_builtin_list(sns, clock):
+    assert is_thanks(post(SPAM))
+    assert sns.published == []
+
+
+def test_an_unreadable_table_falls_back_and_the_form_still_works(sns, clock, monkeypatch, caplog):
+    def broken(scope):
+        raise RuntimeError("DynamoDB is down")
+    monkeypatch.setattr(store, "spam_rows", broken)
+    with caplog.at_level("WARNING"):
+        assert is_thanks(post(SPAM))
+        assert is_thanks(post(good(), ip="198.51.100.9"))
+    assert len(sns.published) == 1  # the spam was dropped by the fallback list, the honest message delivered
+    assert "using the built-in list" in caplog.text
+
+
+def test_unusable_entries_are_skipped_logged_and_cannot_block_ordinary_mail(sns, clock, caplog):
+    add_row("custom", "license, seat, a, (x|y), gadget offer")
+    with caplog.at_level("WARNING"):
+        assert is_thanks(post(good(message="Hello, my license shows SEAT_LIMIT on one seat. Please help."),
+                              ip="198.51.100.4"))
+        assert is_thanks(post(pitch(GADGET), ip="198.51.100.5"))
+    assert len(sns.published) == 1 and "entries were skipped" in caplog.text

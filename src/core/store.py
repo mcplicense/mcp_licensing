@@ -423,6 +423,24 @@ def delete_banned(email_hash):
     _table("BANNED_TABLE").delete_item(Key={"email_hash": email_hash})
 
 
+# ------------------------------------------------------------- spam phrases
+
+MAX_SPAM_PAGES = 20
+
+
+def spam_rows(scope):
+    """Every row of one spam phrase scope (a form), in name order. Not tenant data: the table is edited by
+    hand and holds phrases only (core/spam.py validates them)."""
+    items, kwargs = [], {"KeyConditionExpression": Key("scope").eq(scope)}
+    for _ in range(MAX_SPAM_PAGES):
+        page = _table("SPAM_TABLE").query(**kwargs)
+        items += page["Items"]
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    return items
+
+
 # -------------------------------------------------------------- rate limits
 
 RATE_WINDOW_SEC = 60

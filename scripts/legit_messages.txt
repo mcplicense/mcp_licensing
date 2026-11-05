@@ -1,0 +1,30 @@
+Hello, I would like to know how seats work.
+My license shows SEAT_LIMIT but I only use one laptop. Can you raise the limit to 5 seats?
+Does the verify endpoint return lease_expires_at in UTC? The docs say epoch seconds.
+The Node example fails with a TLS error on Windows 11; the Python one works.
+We ship a cryptography plugin and want one license per customer. Is that possible?
+How do I report a security problem in the console? I found the login page confusing.
+Please delete my account and data under the privacy policy. My tenant id is mcp-k7m2x9.
+Is there a way to export the audit log as CSV?
+Our company name is Seoul Tools Ltd and we need 20 seats.
+Contact me at jane@example.com
+I rotated a license key by mistake. Can the old one be restored?
+Can I move a seat from my old laptop to a new one before the lease runs out?
+We are building an MCP server for accounting and need to charge per customer. Does verify work offline for a few days?
+The device id I send is a random UUID saved on first run. Is that fine, or should it be hashed?
+How many requests per minute can one tenant make? We have about 300 devices.
+Our users are behind a proxy that blocks the API host. Which address should we allow?
+The license expired yesterday but my customer paid for a year. Can you check the expiry date?
+Is the refresh cookie scoped to the portal path only? I want to build my own login page.
+We would like to host the service ourselves. Which parts do we need to deploy?
+I get a 429 RATE_LIMITED when my tool starts. How long should I wait before retrying?
+Does the client helper work with Python 3.8? Our build machines are old.
+Is it possible to give one customer two licenses with different expiry dates?
+Please increase the limit of active licenses for tenant mcp-k7m2x9 to 100, we signed more customers.
+Where can I see which devices hold a seat on a license?
+Why does the console say my tenant is disabled? I did not suspend anything.
+Our legal team asks where the data is stored and for how long. Is there a data processing agreement?
+Suggestion: it would help to see the last time each device checked in.
+How do I report abuse coming from one of your tenants?
+Thank you for the quick reply yesterday, the seat release worked.
+Is the source code license Apache 2.0 for commercial use as well?

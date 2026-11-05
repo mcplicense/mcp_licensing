@@ -72,6 +72,7 @@ grace window, so the kill switch takes effect on the next check after `client_ca
 | `mcp_platform_control` | `control_key` | the global kill switch |
 | `mcp_rate_counter` | `bucket` (`tenant_id#minute`) | verify counts per tenant per minute, contact/sign-up/login attempt counters and locks; items expire by DynamoDB TTL. Not retained, no PITR (disposable) |
 | `mcp_banned_email` | `email_hash` | hashed, normalised addresses of banned tenants' owners, checked at sign-up |
+| `mcp_spam_phrase` | `scope`, `name` | the contact form's spam phrases, edited by hand (see [Spam phrases](#spam-phrases)) |
 
 dev and prod are deployed to different regions, so table names are the same in both.
 
@@ -279,6 +280,7 @@ sam deploy --stack-name mcp-licensing-prod --region us-east-1 --capabilities CAP
   --s3-bucket <deploy-bucket> --parameter-overrides Stage=prod OriginSecret=<secret> \
   SiteOrigin=https://mcplicense.net EmailDomain=mcplicense.net ContactEmail=<inbox for contact form and sign-up messages>
 python scripts/seed_config.py --stage prod --region us-east-1   # creates missing SSM settings, keeps yours
+python scripts/seed_spam_phrases.py --region us-east-1         # the starter spam phrases, keeps your edits
 python scripts/bootstrap_super_key.py --region us-east-1        # prints your super_admin key once
 
 # 2. edge stack (ApiId is an output of the stack above)
@@ -376,9 +378,10 @@ query strings, API keys or the viewer's Host header.
   field that only a bot fills in (answered like success, nothing sent, but it counts as an attempt); **3 messages
   per visitor, then a 30-minute lock** (the 4th starts the lock; the count restarts after 30 idle minutes); a
   **spam filter** (a link, or a sales phrase such as "SEO" or "backlinks", in the name or message: answered like
-  success, nothing sent, the log records only the reason; the rules are in `src/core/spam.py` and
-  `contact_spam_filter=0` switches it off); a daily cap on the whole form (100); size limits; WAF rate rule `rate-contact` (10 per 10 minutes per IP) in front.
+  success, nothing sent, the log records only the reason; `contact_spam_filter=0` switches it off, see
+  [Spam phrases](#spam-phrases)); a daily cap on the whole form (100); size limits; WAF rate rule `rate-contact` (10 per 10 minutes per IP) in front.
   The three numbers are SSM settings above.
+* **Spam phrases** live in the `mcp_spam_phrase` table, not in code, so a new pitch needs no deploy (see below).
 * **Who is "a visitor":** the IPv4 address, or the IPv6 /64 (one subscriber holds a whole /64), read from
   `CloudFront-Viewer-Address`, which CloudFront sets itself. `X-Forwarded-For` is ignored because a visitor can
   forge it.
@@ -386,6 +389,35 @@ query strings, API keys or the viewer's Host header.
   the limits above instead.
 * **Reading and replying:** messages arrive as emails from AWS Notifications with the sender's address in the
   body. To reply from the domain, see [Mail](#mail).
+
+### Spam phrases
+
+A contact message is dropped (silently: the sender still sees the thank-you page) when its name or text contains a
+**link** (`http://`, `https://`, `ftp://`, `www.`; fixed in code, `src/core/spam.py`) or a **phrase** from the
+`mcp_spam_phrase` table. The phrases are data, read on every post, so a change applies to the next message with
+no deploy.
+
+* **Rows.** One row per group: `scope` (`contact`), `name` (any label), `phrases` (one or many, separated by
+  commas or lines), `enabled` (set `false` to switch a row off without deleting it) and an optional `note`.
+  Edit them in the DynamoDB console (Create item / Edit item), by CSV import, or with the helper:
+
+  ```bash
+  python scripts/spam_phrases.py list
+  python scripts/spam_phrases.py add "free quote" "domain renewal" --group custom
+  python scripts/spam_phrases.py remove "free quote"
+  python scripts/spam_phrases.py test "Hello, we offer SEO audits"
+  ```
+
+  `scripts/seed_spam_phrases.py` writes the starter rows once and never overwrites a row you edited.
+* **Plain phrases, never patterns.** Matched whole-word, case-insensitively, spaces and hyphens alike; a trailing
+  `*` matches word endings (`outsourc*`). An entry that is too short or long, has odd characters, or is an
+  everyday word of this service ("license", "seat", "key", ...) is skipped and logged, so a careless edit cannot
+  break the form or drop ordinary mail. `add` also refuses a phrase that would block one of the legitimate
+  messages in `scripts/legit_messages.txt` (`--force` overrides).
+* **Fallback.** If the table cannot be read or has no usable phrase, a short built-in list applies
+  (`FALLBACK_PHRASES`). Once the table has phrases it replaces that list.
+* **Off switch.** `contact_spam_filter=0` in SSM switches the whole filter off; the log line
+  `contact form: filtered as spam (<reason>)` shows what is being dropped, never the message.
 
 ## Mail
 
@@ -520,7 +552,7 @@ Tests build their tables from `template.yml`, so the schema cannot drift from th
 ## Layout
 
 ```
-template.yml            HTTP API, 3 Lambdas, 7 tables, SSM parameters, log groups
+template.yml            HTTP API, 5 Lambdas, 9 tables, a Cognito user pool, SSM parameters, log groups
 edge.yml                CloudFront + WAF + certificate + DNS in front of the API (us-east-1)
 site.yml                frontend hosting: private S3 bucket + CloudFront + certificate + DNS (us-east-1)
 mail.yml, mail/         email for the domain: SES identity, DNS, inbound forwarding Lambda (us-east-1)
