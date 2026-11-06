@@ -63,6 +63,13 @@ Anything else is a refusal with `"valid": false`, a `reason` and a `message`:
 A malformed request (a missing field, say) answers `400` with `{"error": {"code": ..., "message": ...}}`. A `5xx`
 or a network failure means the check could not be made.
 
+**Timeouts and retries.** The first check after the service has been idle can take a few seconds, so give each
+request about 9 seconds (the examples below do), and when the check could not be made, try again a few times with
+short pauses (half a second, then one, two, four) before you give up. Repeating a check is safe: the same device
+only renews its seat. For a `429`, wait the `retry_after_seconds` the answer names (but no more than about ten
+seconds). The Python helper `client/mcp_auth.py` does all of this and lets you change the numbers
+(`MCP_LICENSE_TIMEOUT`, `MCP_LICENSE_RETRIES`, `MCP_LICENSE_DEADLINE`).
+
 **The rule to follow:** a `401` or `403` that carries a `reason` is a decision about the license: stop, and discard
 anything you cached. Everything else (a network error, a `429`, a `5xx`, a block page from a proxy) means "could
 not check", and you decide whether to keep running.
@@ -93,7 +100,7 @@ def check_license(license_key, device_id):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=9) as response:
             return True, json.load(response)
     except urllib.error.HTTPError as error:
         try:
@@ -125,7 +132,7 @@ async function checkLicense(licenseKey, deviceId) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ license_key: licenseKey, device_id: deviceId }),
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(9000),
   });
   const body = await response.json().catch(() => ({}));
   if (response.ok && body.valid) return { ok: true, info: body };

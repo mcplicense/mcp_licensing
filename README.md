@@ -493,6 +493,23 @@ Set `MCP_LICENSE_API_URL` (or the `API_URL` constant when you ship the tool). A 
 `cache_ttl_seconds`; if the API is unreachable a previous success is honoured only until the
 server's `lease_expires_at` (see Seat leases).
 
+**Timing.** The first call after the service has been idle (a cold Lambda) takes a few seconds, so the
+helper waits up to **9 seconds** for an answer and, when none comes (a timeout, a network error, a 5xx, or a
+429 after the pause the service asks for), tries again up to **5 more times**, never taking more than **45
+seconds** in all. A decision (valid, or a 401/403 with a `reason`) is final and never retried; repeating a
+check is harmless, the same device only renews its seat. Each value is an environment variable, or the
+constant of the same name at the top of the file as the default for a build you ship:
+
+| Environment variable | Constant | Default | Allowed |
+|---|---|---|---|
+| `MCP_LICENSE_TIMEOUT` | `TIMEOUT_SECONDS` | 9 | 1 to 25 |
+| `MCP_LICENSE_RETRIES` | `RETRIES` | 5 | 0 to 10 |
+| `MCP_LICENSE_DEADLINE` | `DEADLINE_SECONDS` | 45 | 5 to 120 |
+
+A bad value is ignored (the default is used). Keep the deadline under the time your host gives a tool to
+start (a chat app allows about a minute). When a recent success can still be honoured offline, the helper asks
+once and does not retry, so an offline laptop starts at once.
+
 ## Rate limit (per tenant)
 
 Verify is limited **per tenant, per minute**: **100** requests by default, counted across all of the
