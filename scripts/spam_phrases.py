@@ -5,6 +5,7 @@
     python scripts/spam_phrases.py add "domain renewal" --group scams    # into another row
     python scripts/spam_phrases.py remove "free quote"
     python scripts/spam_phrases.py test "Hello, we offer SEO audits for your site"
+    python scripts/spam_phrases.py export        # write the live table to scripts/data/spam_phrases.json (commit it)
 
 Phrases are plain text, matched whole-word and case-insensitively; a trailing * matches word endings
 ("outsourc*"). `add` refuses a phrase that would block one of the legitimate messages in
@@ -13,6 +14,7 @@ DynamoDB console: one row per group, `phrases` separated by commas or lines, `en
 Uses the default AWS profile.
 """
 import argparse
+import json
 import os
 import pathlib
 import sys
@@ -25,6 +27,7 @@ from core import spam  # noqa: E402
 
 SCOPE = "contact"
 CORPUS = pathlib.Path(__file__).resolve().parent / "legit_messages.txt"
+DATA_FILE = pathlib.Path(__file__).resolve().parent / "data" / "spam_phrases.json"
 
 
 def legit_messages():
@@ -81,6 +84,21 @@ def remove(table, phrase):
     return changed
 
 
+def export(table):
+    """The rows of the table as plain dicts, in the order and shape of scripts/data/spam_phrases.json."""
+    out = []
+    for row in rows(table):
+        phrases = row.get("phrases")
+        if isinstance(phrases, (set, frozenset, list, tuple)):
+            phrases = ", ".join(sorted(str(p) for p in phrases))
+        item = {"scope": row["scope"], "name": row["name"], "enabled": row.get("enabled") is not False}
+        if row.get("note"):
+            item["note"] = str(row["note"])
+        item["phrases"] = str(phrases or "")
+        out.append(item)
+    return out
+
+
 def verdict(table, message):
     phrases, _ = spam.phrases_from_rows(rows(table))
     return spam.reason("", message, phrases or None)
@@ -98,6 +116,9 @@ def main(argv=None):
     add_parser.add_argument("--force", action="store_true")
     commands.add_parser("remove").add_argument("phrase")
     commands.add_parser("test").add_argument("message")
+    export_parser = commands.add_parser("export")
+    export_parser.add_argument("--file", default=str(DATA_FILE),
+                               help="where to write the rows (default: scripts/data/spam_phrases.json)")
     args = parser.parse_args(argv)
 
     table = boto3.resource("dynamodb", region_name=args.region).Table(args.table)
@@ -117,6 +138,12 @@ def main(argv=None):
     elif args.command == "remove":
         changed = remove(table, args.phrase)
         print("removed from: {}".format(", ".join(changed) if changed else "no row (not found)"))
+    elif args.command == "export":
+        found = export(table)
+        with open(args.file, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(found, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        print("wrote {} rows to {}; commit it to keep git in step with the table".format(len(found), args.file))
     else:
         why = verdict(table, args.message)
         print("SPAM ({})".format(why) if why else "looks like a person: delivered")

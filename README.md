@@ -408,7 +408,19 @@ no deploy.
   python scripts/spam_phrases.py test "Hello, we offer SEO audits"
   ```
 
-  `scripts/seed_spam_phrases.py` writes the starter rows once and never overwrites a row you edited.
+  The rows are also kept in git, in `scripts/data/spam_phrases.json`, so the table can be rebuilt and a change
+  is reviewable. Two ways round:
+
+  ```bash
+  # the file is the source: add a phrase to it (or a new row), commit, then push it to the live table
+  python scripts/seed_spam_phrases.py --region us-east-1 --merge     # adds missing rows and phrases; removes nothing
+  # the table is the source: you edited it live, so record it
+  python scripts/spam_phrases.py export                              # rewrites the file; commit it
+  ```
+
+  Without `--merge`, `seed_spam_phrases.py` only creates rows that do not exist, so it never undoes an edit.
+  `scripts/data/spam_samples.txt` keeps real spam messages (separated by `-----`); a test fails if the starter
+  phrases stop catching any of them, so add each new kind of spam there when you add its phrases.
 * **Plain phrases, never patterns.** Matched whole-word, case-insensitively, spaces and hyphens alike; a trailing
   `*` matches word endings (`outsourc*`). An entry that is too short or long, has odd characters, or is an
   everyday word of this service ("license", "seat", "key", ...) is skipped and logged, so a careless edit cannot

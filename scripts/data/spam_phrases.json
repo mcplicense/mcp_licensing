@@ -1,0 +1,44 @@
+[
+  {
+    "scope": "contact",
+    "name": "boost",
+    "enabled": true,
+    "note": "'boost / increase your sales' style pitches",
+    "phrases": "increase sales, increase your sales, increase traffic, increase your traffic, increase revenue, increase your revenue, increase conversions, increase your conversions, boost sales, boost your sales, boost traffic, boost your traffic, boost ranking*, boost your ranking*, boost your website, boost your business, boost your online, boost online"
+  },
+  {
+    "scope": "contact",
+    "name": "development",
+    "enabled": true,
+    "note": "agency and outsourcing offers",
+    "phrases": "web design, web development, app development, outsourc*"
+  },
+  {
+    "scope": "contact",
+    "name": "marketing",
+    "enabled": true,
+    "note": "marketing and lead-generation pitches",
+    "phrases": "digital marketing, marketing services, social media marketing, social media management, lead generation, cold email*, email list*, online presence, online visibility, online performance"
+  },
+  {
+    "scope": "contact",
+    "name": "scams",
+    "enabled": true,
+    "note": "money, crypto and pharmacy spam",
+    "phrases": "bitcoin, cryptocurrency, crypto, casino, forex, viagra, payday loan*, make money, work from home"
+  },
+  {
+    "scope": "contact",
+    "name": "search_listing",
+    "enabled": true,
+    "note": "'list your site in Google' and domain-registration scams (added after a real one, 2026-11-05)",
+    "phrases": "search index, google search results, show up in google, listed in google, indexed in google, google listing*, top of google, register your domain, domain registration, domain renewal, domain expir*"
+  },
+  {
+    "scope": "contact",
+    "name": "seo",
+    "enabled": true,
+    "note": "SEO and search-ranking pitches",
+    "phrases": "seo, search engine*, search ranking*, google ranking*, first page of google, backlink*, link building, guest post*, website traffic, site traffic, web traffic, organic traffic, target keyword*"
+  }
+]

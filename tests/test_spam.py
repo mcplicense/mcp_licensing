@@ -21,6 +21,10 @@ def load_script(name):
 STARTER, _ = spam.phrases_from_rows(load_script("seed_spam_phrases").STARTER_ROWS)
 LEGIT = [line for line in (ROOT / "scripts" / "legit_messages.txt").read_text(encoding="utf-8").splitlines() if line.strip()]
 
+SPAM_SAMPLES = [block.strip() for block in
+                (ROOT / "scripts" / "data" / "spam_samples.txt").read_text(encoding="utf-8").split("\n-----\n")
+                if block.strip()]
+
 # The message that prompted the filter (a real one, with the sender's details removed).
 SEO_PITCH = """Hello http://mcplicense.net,
 
@@ -186,3 +190,26 @@ def test_empty_input_is_not_spam():
 def test_the_reason_never_contains_more_than_the_matched_phrase():
     text = "x" * 500 + " SEO " + "y" * 500
     assert len(spam.reason("", text, STARTER)) < 80
+
+
+@pytest.mark.parametrize("sample", SPAM_SAMPLES)
+def test_every_real_spam_sample_in_git_is_caught_by_the_starter_list(sample):
+    assert spam.reason("", sample, STARTER) is not None
+
+
+def test_the_search_listing_scam_is_caught_by_a_phrase_not_by_the_link_rule():
+    """'searchregister.live' is a bare domain, not an http:// link: only the phrases can catch it."""
+    sample = SPAM_SAMPLES[0]
+    assert spam.LINK_RE.search(sample) is None
+    assert spam.reason("", sample, STARTER).startswith("sales phrase")
+
+
+def test_the_data_file_is_valid_sorted_and_names_every_row_once():
+    import json
+    rows = json.loads((ROOT / "scripts" / "data" / "spam_phrases.json").read_text(encoding="utf-8"))
+    keys = [(r["scope"], r["name"]) for r in rows]
+    assert keys == sorted(keys) and len(set(keys)) == len(keys)
+    for row in rows:
+        good, skipped = spam.parse_phrases(row["phrases"])
+        assert good and skipped == [], row["name"]
+        assert set(row) <= {"scope", "name", "enabled", "note", "phrases"}

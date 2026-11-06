@@ -122,3 +122,49 @@ def test_the_corpus_is_real_and_every_line_passes_the_starter_list():
     assert len(messages) >= 25
     phrases, _ = spam.phrases_from_rows(seed.STARTER_ROWS)
     assert all(spam.reason("", m, phrases) is None for m in messages)
+
+
+# ------------------------------------------------------------ merge and export
+
+def test_merge_creates_missing_rows_and_adds_only_missing_phrases(table):
+    table.put_item(Item={"scope": "contact", "name": "seo", "phrases": "seo, my own phrase", "enabled": False,
+                         "note": "mine"})
+    created, extended = seed.merge(table, seed.STARTER_ROWS)
+    assert "seo" not in created and "search_listing" in created
+    assert "my own phrase" not in extended["seo"] and "backlink*" in extended["seo"]
+    row = table.get_item(Key={"scope": "contact", "name": "seo"})["Item"]
+    assert row["phrases"].startswith("seo, my own phrase, ")  # what was there stays, in place
+    assert row["enabled"] is False and row["note"] == "mine"   # edits to the flags are respected
+
+
+def test_merge_twice_changes_nothing_and_never_removes(table):
+    seed.merge(table, seed.STARTER_ROWS)
+    table.update_item(Key={"scope": "contact", "name": "scams"}, UpdateExpression="SET phrases = :p",
+                      ExpressionAttributeValues={":p": "casino"})  # the owner trimmed a row by hand
+    created, extended = seed.merge(table, seed.STARTER_ROWS)
+    assert created == [] and list(extended) == ["scams"]  # only the trimmed row gets its phrases back
+    assert seed.merge(table, seed.STARTER_ROWS) == ([], {})
+
+
+def test_merge_tolerates_a_string_set_row(table):
+    table.put_item(Item={"scope": "contact", "name": "seo", "phrases": {"seo", "my own"}, "enabled": True})
+    seed.merge(table, [{"scope": "contact", "name": "seo", "phrases": "seo, backlink*"}])
+    good, _ = spam.parse_phrases(table.get_item(Key={"scope": "contact", "name": "seo"})["Item"]["phrases"])
+    assert "backlink*" in good
+
+
+def test_export_round_trips_the_data_file_exactly(table, tmp_path):
+    seed.seed(table, seed.STARTER_ROWS)
+    out = tmp_path / "rows.json"
+    helper.main(["export", "--file", str(out)])
+    import json
+    assert json.loads(out.read_text(encoding="utf-8")) == seed.STARTER_ROWS
+    seed.seed(table, json.loads(out.read_text(encoding="utf-8")))  # and it can be loaded again
+
+
+def test_export_records_a_hand_edit_a_disabled_row_and_a_row_without_a_note(table, tmp_path):
+    table.put_item(Item={"scope": "contact", "name": "b", "phrases": {"casino", "forex"}, "enabled": False})
+    table.put_item(Item={"scope": "contact", "name": "a", "phrases": "free quote"})
+    assert helper.export(table) == [
+        {"scope": "contact", "name": "a", "enabled": True, "phrases": "free quote"},
+        {"scope": "contact", "name": "b", "enabled": False, "phrases": "casino, forex"}]

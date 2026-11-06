@@ -1,16 +1,20 @@
-"""Put the starter spam phrases into the mcp_spam_phrase table.
+"""Put the spam phrases in git (scripts/data/spam_phrases.json) into the mcp_spam_phrase table.
 
-    python scripts/seed_spam_phrases.py --region us-east-1                 # the starter rows
-    python scripts/seed_spam_phrases.py --region us-east-1 --file mine.json  # rows from a JSON list instead
+    python scripts/seed_spam_phrases.py --region us-east-1                  # create missing rows only
+    python scripts/seed_spam_phrases.py --region us-east-1 --merge          # also add missing phrases to existing rows
+    python scripts/seed_spam_phrases.py --region us-east-1 --file mine.json # rows from another JSON list
     python scripts/seed_spam_phrases.py --region us-east-1 --dry-run
 
 A row is {"scope": "contact", "name": "seo", "phrases": "seo, backlink*, ...", "enabled": true, "note": "..."}.
-Existing rows (same scope and name) are kept as they are, so running this again never undoes an edit.
-Edit the table afterwards in the DynamoDB console, or with scripts/spam_phrases.py.
+Without --merge an existing row (same scope and name) is kept exactly as it is. With --merge its phrases are
+extended by the ones in the file that it lacks; nothing is ever removed, and `enabled` and `note` stay as they are,
+so running this again never undoes an edit. To record the live table in git after editing it by hand, run
+`python scripts/spam_phrases.py export`.
 """
 import argparse
 import json
 import os
+import pathlib
 import sys
 
 import boto3
@@ -19,24 +23,15 @@ from botocore.exceptions import ClientError
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from core import spam  # noqa: E402
 
-STARTER_ROWS = [
-    {"scope": "contact", "name": "seo", "enabled": True, "note": "SEO and search-ranking pitches",
-     "phrases": "seo, search engine*, search ranking*, google ranking*, first page of google, backlink*, "
-                "link building, guest post*, website traffic, site traffic, web traffic, organic traffic, "
-                "target keyword*"},
-    {"scope": "contact", "name": "marketing", "enabled": True, "note": "marketing and lead-generation pitches",
-     "phrases": "digital marketing, marketing services, social media marketing, social media management, "
-                "lead generation, cold email*, email list*, online presence, online visibility, online performance"},
-    {"scope": "contact", "name": "boost", "enabled": True, "note": "'boost / increase your sales' style pitches",
-     "phrases": "increase sales, increase your sales, increase traffic, increase your traffic, increase revenue, "
-                "increase your revenue, increase conversions, increase your conversions, boost sales, "
-                "boost your sales, boost traffic, boost your traffic, boost ranking*, boost your ranking*, "
-                "boost your website, boost your business, boost your online, boost online"},
-    {"scope": "contact", "name": "development", "enabled": True, "note": "agency and outsourcing offers",
-     "phrases": "web design, web development, app development, outsourc*"},
-    {"scope": "contact", "name": "scams", "enabled": True, "note": "money, crypto and pharmacy spam",
-     "phrases": "bitcoin, cryptocurrency, crypto, casino, forex, viagra, payday loan*, make money, work from home"},
-]
+DATA_FILE = pathlib.Path(__file__).resolve().parent / "data" / "spam_phrases.json"
+
+
+def load_rows(path=DATA_FILE):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+STARTER_ROWS = load_rows()
 
 
 def check_rows(rows):
@@ -65,25 +60,55 @@ def seed(table, rows):
     return created, kept
 
 
+def merge(table, rows):
+    """Create missing rows and add the phrases an existing row lacks. Returns (created names, {name: phrases
+    added}). Never removes a phrase and never changes `enabled` or `note` of an existing row."""
+    check_rows(rows)
+    created, extended = [], {}
+    for row in rows:
+        key = {"scope": row["scope"], "name": row["name"]}
+        existing = table.get_item(Key=key).get("Item")
+        if existing is None:
+            table.put_item(Item=row)
+            created.append(row["name"])
+            continue
+        have, _ = spam.parse_phrases(existing.get("phrases"))
+        wanted, _ = spam.parse_phrases(row.get("phrases"))
+        missing = [phrase for phrase in wanted if phrase not in have]
+        if missing:
+            text = str(existing.get("phrases") or "").rstrip().rstrip(",")
+            table.update_item(Key=key, UpdateExpression="SET phrases = :p",
+                              ExpressionAttributeValues={":p": (text + ", " if text else "") + ", ".join(missing)})
+            extended[row["name"]] = missing
+    return created, extended
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--region", default="us-east-1")
     parser.add_argument("--table", default="mcp_spam_phrase")
-    parser.add_argument("--file", help="a JSON list of rows to use instead of the starter rows")
+    parser.add_argument("--file", help="a JSON list of rows to use instead of scripts/data/spam_phrases.json")
+    parser.add_argument("--merge", action="store_true", help="also add missing phrases to existing rows")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
-    rows = STARTER_ROWS
-    if args.file:
-        with open(args.file, encoding="utf-8") as handle:
-            rows = json.load(handle)
+    rows = load_rows(args.file) if args.file else STARTER_ROWS
     check_rows(rows)
     if args.dry_run:
         for row in rows:
-            print("would add {}/{}: {}".format(row["scope"], row["name"], row["phrases"][:70]))
+            print("would {} {}/{}: {}".format("merge" if args.merge else "add", row["scope"], row["name"],
+                                              row["phrases"][:70]))
         return
     table = boto3.resource("dynamodb", region_name=args.region).Table(args.table)
-    created, kept = seed(table, rows)
-    print("created:", ", ".join(created) or "none", "| kept as they were:", ", ".join(kept) or "none")
+    if args.merge:
+        created, extended = merge(table, rows)
+        print("created:", ", ".join(created) or "none")
+        for name, phrases in extended.items():
+            print("added to {}: {}".format(name, ", ".join(phrases)))
+        if not created and not extended:
+            print("nothing to add: the table already has every phrase in the file")
+    else:
+        created, kept = seed(table, rows)
+        print("created:", ", ".join(created) or "none", "| kept as they were:", ", ".join(kept) or "none")
 
 
 if __name__ == "__main__":
