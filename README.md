@@ -1,11 +1,14 @@
 # mcp_licensing
 
-Serverless license verification for MCP tools: API Gateway **HTTP API**,
+**Open-source license checks for MCP tools, on AWS.** A serverless service: API Gateway **HTTP API**,
 **Python Lambda**, **DynamoDB on-demand**, SSM Parameter Store for tunables.
 No servers, no always-on cost.
 
-A hosted version runs at https://mcplicense.net (sign up, console and docs there); this repository is the
-source, released under the [Apache License 2.0](LICENSE). Security reports: see [SECURITY.md](SECURITY.md);
+**Run it yourself, or use ours.** Everything needed to run the service in **your own AWS account** is in this
+repository, released under the [Apache License 2.0](LICENSE): fork it, deploy it, change it. If you would rather not
+run anything, an already hosted copy is available at https://mcplicense.net (API: `https://api.mcplicense.net`),
+free for developers today. It is the same code and the same API, so your tool only needs a different base URL to
+move between them (licenses and keys do not move automatically). Security reports: see [SECURITY.md](SECURITY.md);
 to contribute: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This repository is the **backend and the infrastructure**: the API, the Lambdas, the tables, the sign-up and
@@ -14,6 +17,47 @@ documentation of every route (`docs/`). It ships **no website**: the pages of th
 it, and building a frontend for your own deployment is up to you. [docs/login-api.md](docs/login-api.md) is the
 contract such a frontend follows, and [docs/integration.md](docs/integration.md) explains how a tool checks a
 license.
+
+## Two ways to use it
+
+| | Run it in your own AWS account | Use the hosted service |
+|---|---|---|
+| What you do | Deploy the stacks from this repository (quick start below) | Sign up at https://mcplicense.net |
+| API address | The one your deployment gives you | `https://api.mcplicense.net` |
+| Cost | Your own AWS usage: pay per request, nothing runs idle. The optional CloudFront + WAF edge adds about $11 a month fixed (see [Edge](#edge-cloudfront--waf)) | Free for developers today |
+| Your data | Stays in your account | Held by the hosted service |
+| You look after | Deploys and upgrades, backups, abuse, email, your own domain and legal pages | Nothing |
+| Web console | The hosted service's pages are not part of the open-source release: manage with the admin API and scripts, or build a frontend on the documented sign-up and console API | Included at https://mcplicense.net |
+
+The hosted service is a convenience, not a requirement. This is an open-source project first, and anything the hosted
+service does, your own deployment can do too.
+
+### Self-hosting quick start
+
+You need an AWS account with credentials configured, the AWS CLI, the
+[AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
+and Python 3.12.
+
+```bash
+git clone https://github.com/mcplicense/mcp_licensing && cd mcp_licensing
+sam build
+# the app stack: the API, Lambdas, tables and sign-up/login. Stage=dev needs no domain and no firewall
+sam deploy --stack-name mcp-licensing-dev --region us-east-2 --capabilities CAPABILITY_IAM --resolve-s3 \
+  --parameter-overrides Stage=dev
+python scripts/seed_config.py --stage dev --region us-east-2      # creates the settings, keeps yours
+python scripts/bootstrap_super_key.py --region us-east-2          # prints your super_admin key once
+aws cloudformation describe-stacks --stack-name mcp-licensing-dev --region us-east-2 \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text    # your API address
+```
+
+Then create a tenant with the super key (`POST /v1/super/tenants`, see [docs/openapi-internal.yaml](docs/openapi-internal.yaml)),
+create a license with the tenant's admin key ([docs/integration.md](docs/integration.md),
+[docs/openapi-tenant.yaml](docs/openapi-tenant.yaml)), and point your tool's check at your API address (the client
+helper reads `MCP_LICENSE_API_URL`).
+
+Two things to know. Table names are fixed (`mcp_*`), so **each region of an AWS account holds one stack**. And
+`Stage=dev` has **no firewall and no origin check**: fine to try it out, but for anything public deploy `Stage=prod`
+with the edge stack, as described under [Deploy](#deploy).
 
 ## Who calls what
 
@@ -262,7 +306,8 @@ aws cloudformation deploy --stack-name mcp-licensing-guard-prod --region us-east
 ## Deploy
 
 **prod** is in **us-east-1** and **dev** in **us-east-2**. Table names are fixed (`mcp_*`), so each
-region holds one stack. Prod has four stacks, deployed in this order:
+region holds one stack. The commands below show the values of the hosted service (`mcplicense.net`); replace the
+domain, zone, secret and addresses with your own. Prod has four stacks, deployed in this order:
 
 1. `template.yml` — the API, Lambdas, tables and the Cognito user pool.
 2. `edge.yml` — CloudFront and WAF in front of the API, its certificate and DNS (see [Edge](#edge-cloudfront--waf)).

@@ -1,7 +1,9 @@
 # Integrating the license check
 
-Everything a tool needs to check a license, and what to do with the answer. The examples use the hosted address
-`https://api.mcplicense.net`; if you run your own deployment, use its public API address instead.
+Everything a tool needs to check a license, and what to do with the answer. MCP Licensing is open source: you can
+run it in your own AWS account (see the README's self-hosting quick start) or use the hosted copy, free for developers
+today. The API is the same either way. The examples use the hosted address `https://api.mcplicense.net`; if you run
+your own deployment, use its API address instead.
 
 ## Concepts
 
